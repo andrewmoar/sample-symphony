@@ -1,0 +1,9 @@
+#  gateway DEV environment
+
+
+
+# Redis (for sessions token save)
+REDIS_SCHEME=tcp
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+

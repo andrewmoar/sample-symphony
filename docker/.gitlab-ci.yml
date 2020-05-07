@@ -1,0 +1,194 @@
+stages:
+  - base
+  - build
+  - deploy
+  - clean
+# General config file
+variables:
+  GIT_STRATEGY: "clone"
+  BASE_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/base:latest"
+  BASE_DEV_LOCAL_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/base-local:latest"
+
+  #DEV
+  SERVICE_DEV_NAME: "gateway-dev"
+  SERVICE_DEV_LOCAL_NAME: "gateway-dev-local"
+  NGINX_DEV_NAME: "nginx-dev"
+  POSTGRES_DEV_NAME: "postgres-dev"
+  SERVICE_DEV_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/$SERVICE_DEV_NAME:$CI_COMMIT_REF_NAME"
+  SERVICE_DEV_LOCAL_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/$SERVICE_DEV_LOCAL_NAME:$CI_COMMIT_REF_NAME"
+  NGINX_DEV_IMAGE: "$CI_REGISTRY_IMAGE/$NGINX_DEV_NAME:latest"
+  POSTGRES_DEV_IMAGE: "$CI_REGISTRY_IMAGE/$POSTGRES_DEV_NAME:latest"
+
+  #UAT
+  SERVICE_UAT_NAME: "gateway-uat"
+  NGINX_UAT_NAME: "nginx-uat"
+  SERVICE_UAT_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/$SERVICE_UAT_NAME:$CI_COMMIT_REF_NAME"
+  NGINX_UAT_IMAGE: "$CI_REGISTRY_IMAGE/$NGINX_UAT_NAME:latest"
+
+  #PROD
+  SERVICE_PROD_NAME: "gateway-prod"
+  NGINX_PROD_NAME: "nginx-prod"
+  SERVICE_PROD_RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/$SERVICE_PROD_NAME:$CI_COMMIT_REF_NAME"
+  NGINX_PROD_IMAGE: "$CI_REGISTRY_IMAGE/$NGINX_PROD_NAME:latest"
+  DEPLOY_USER: "obdeploy"
+
+cache:
+  key: $CI_COMMIT_REF_NAME
+  paths:
+    - vendor
+
+
+
+.prepare_template: &prepare_definition
+  before_script:
+    - date
+    - docker version
+    - docker info
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+
+.base_template: &build-base
+  script:
+    - docker build --pull --no-cache -f docker/base.dockerfile -t $BASE_RELEASE_IMAGE .
+    - docker push $BASE_RELEASE_IMAGE
+    - docker rmi $BASE_RELEASE_IMAGE
+
+.base_template_local: &build-base-local
+  script:
+    - docker build --pull --no-cache --build-arg environment=dev-local -f docker/base.dockerfile -t $BASE_DEV_LOCAL_RELEASE_IMAGE .
+    - docker push $BASE_DEV_LOCAL_RELEASE_IMAGE
+    - docker rmi $BASE_DEV_LOCAL_RELEASE_IMAGE
+
+
+.build_template: &build
+  script:
+    - >
+      docker build
+      --build-arg environment=dev
+      --build-arg repo=$BASE_RELEASE_IMAGE
+      --no-cache -f docker/images/gateway/Dockerfile
+      -t $SERVICE_DEV_RELEASE_IMAGE .
+    - docker push $SERVICE_DEV_RELEASE_IMAGE
+    - docker build --build-arg environment=dev  -f docker/nginx.dockerfile -t $NGINX_DEV_IMAGE .
+    - docker push $NGINX_DEV_IMAGE
+    - docker build --build-arg environment=dev  -f docker/postgres.dockerfile -t $POSTGRES_DEV_IMAGE .
+    - docker push $POSTGRES_DEV_IMAGE
+    - docker rmi $SERVICE_DEV_RELEASE_IMAGE $NGINX_DEV_IMAGE $POSTGRES_DEV_IMAGE
+
+# Just build without deploy, version fro local deployment
+.build_dev_template: &build_local
+  script:
+    - >
+      docker build
+      --build-arg environment=dev
+      --build-arg repo=$BASE_DEV_LOCAL_RELEASE_IMAGE
+      --no-cache -f docker/images/gateway/Dockerfile
+      -t $SERVICE_DEV_LOCAL_RELEASE_IMAGE .
+    - docker push $SERVICE_DEV_LOCAL_RELEASE_IMAGE
+    - docker rmi $SERVICE_DEV_LOCAL_RELEASE_IMAGE
+
+deploy-dev1:
+  stage: deploy
+  <<: *prepare_definition
+  script:
+    - >
+      ansible-playbook docker/ansible/deploy.yml
+      -i docker/ansible/hosts
+      -e ansible_user=$(echo "$DEPLOY_USER")
+      -e environment=dev
+      -e SERVICE_NAME=$(echo "$SERVICE_DEV_NAME")
+      -e RELEASE_IMAGE=$(echo "$SERVICE_DEV_RELEASE_IMAGE")
+      -e NGINX_IMAGE=$(echo "$NGINX_DEV_IMAGE" )
+      -e POSTGRES=$(echo "$POSTGRES_DEV_IMAGE" )
+      -e REGISTRY_PASSWORD=$(echo "$CI_JOB_TOKEN")
+      -l gate001
+
+  tags:
+    - gw-dev1
+    - gw-dev2
+    - gateway
+
+  when: manual
+
+deploy_dev2:
+  stage: deploy
+  <<: *prepare_definition
+  script:
+    - >
+      ansible-playbook docker/ansible/deploy.yml
+      -i docker/ansible/hosts
+      -e ansible_user=$(echo "$DEPLOY_USER")
+      -e environment=dev
+      -e SERVICE_NAME=$(echo "$SERVICE_DEV_NAME")
+      -e RELEASE_IMAGE=$(echo "$SERVICE_DEV_RELEASE_IMAGE")
+      -e NGINX_IMAGE=$(echo "$NGINX_DEV_IMAGE" )
+      -e POSTGRES=$(echo "$POSTGRES_DEV_IMAGE" )
+      -e REGISTRY_PASSWORD=$(echo "$CI_JOB_TOKEN")
+      -l gate002
+
+  tags:
+    - gw-dev1
+    - gw-dev2
+    - gateway
+  when: manual
+
+
+.clean_template: &clean
+  stage: clean
+  script:
+
+    - docker ps -a -q -f status=exited | xargs --no-run-if-empty docker rm --volumes
+    - docker images | awk '/^<none>/ { print $3 }' | xargs --no-run-if-empty docker rmi -f
+    - docker volume ls -q --filter="dangling=true" | xargs --no-run-if-empty docker volume rm
+
+  when: manual
+
+build-base:
+  stage: base
+  <<: *prepare_definition
+  <<: *build-base
+  tags:
+    - gateway
+    - gw-dev1
+    - gw-dev2
+  rules:
+    - changes:
+        - docker/base.dockerfile
+
+build-base-local:
+  stage: base
+  <<: *prepare_definition
+  <<: *build-base-local
+  tags:
+    - gateway
+    - gw-dev1
+    - gw-dev2
+  rules:
+    - changes:
+        - docker/base.dockerfile
+
+build-gateway:
+  stage: build
+  <<: *prepare_definition
+  <<: *build
+  tags:
+    - gateway
+    - gw-dev1
+    - gw-dev2
+
+
+build-gateway-local:
+  stage: build
+  <<: *prepare_definition
+  <<: *build_local
+  tags:
+    - gateway
+    - gw-dev1
+    - gw-dev2
+
+clean:
+  <<: *clean
+  tags:
+    - gateway
+    - gw-dev1
+    - gw-dev2
+

@@ -1,0 +1,19 @@
+[gateway]
+[gateway:children]
+develop
+uat
+production
+[develop]
+
+gate001 ansible_host=10.10.219.101
+gate002 ansible_host=10.10.219.102
+
+[uat]
+
+
+[production]
+
+
+[gateway:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+ansible_ssh_private_key_file='/home/obdeploy/.ssh/id_rsa'

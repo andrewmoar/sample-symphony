@@ -1,0 +1,4 @@
+project_user: obdeploy
+dest_dir: "/opt/gateway"
+REGISTRY: "registry.local.net"
+REGISTRY_USER: "gitlab-ci-token"
